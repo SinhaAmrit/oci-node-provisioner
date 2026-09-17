@@ -45,7 +45,7 @@ BOOT_VOLUME_GB = int(os.environ.get("BOOT_VOLUME_GB", "150"))
 
 # Retry config — proven sweet spot (zero 429 zone)
 MAX_ATTEMPTS  = int(os.environ.get("MAX_ATTEMPTS", "18"))
-WAIT_MIN      = int(os.environ.get("WAIT_MIN", "85"))
+WAIT_MIN      = int(os.environ.get("WAIT_MIN", "90"))
 WAIT_MAX      = int(os.environ.get("WAIT_MAX", "95"))
 
 # 429 insurance (normally trigger nahi hoga)
