@@ -39,9 +39,9 @@ jobs:
           OCI_IMAGE_ID:       ${{ secrets.OCI_IMAGE_ID }}
           OCI_PUBLIC_SSH_KEY: ${{ secrets.OCI_PUBLIC_SSH_KEY }}
           OCI_STACK_ID:       ${{ secrets.OCI_STACK_ID }}
-          OCPUS:              '4'
-          MEMORY_GB:          '24'
-          BOOT_VOLUME_GB:     '50'
+          OCPUS:              '2'
+          MEMORY_GB:          '12'
+          BOOT_VOLUME_GB:     '150'
           MAX_ATTEMPTS:       '30'
           POLL_INTERVAL:      '60'
         run: python bot.py
