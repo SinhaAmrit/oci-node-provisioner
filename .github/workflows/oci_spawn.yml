@@ -2,16 +2,24 @@ name: OCI Provisioner
 
 on:
   schedule:
-    - cron: '*/30 * * * *'   # Every 30 minutes
-  workflow_dispatch:          # Manual trigger button
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
   push:
     branches: [ main ]
     paths: [ '.github/workflows/oci_spawn.yml' ]
 
+# Safety net: agar kabhi run overlap ho, nayi run purani ko cancel kar de
+concurrency:
+  group: oci-provision
+  cancel-in-progress: true
+
+permissions:
+  actions: write          # github.token se workflow disable karne ke liye
+
 jobs:
   provision:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 35
 
     steps:
       - name: Checkout repository
@@ -41,12 +49,12 @@ jobs:
           OCI_STACK_ID:       ${{ secrets.OCI_STACK_ID }}
           BOT_TOKEN:          ${{ secrets.BOT_TOKEN }}
           TELEGRAM_UID:       ${{ secrets.TELEGRAM_UID }}
-          GH_TOKEN:           ${{ secrets.GH_TOKEN }}
+          GH_TOKEN:           ${{ github.token }}
           WORKFLOW_PATH:      '.github/workflows/oci_spawn.yml'
           OCPUS:              '2'
           MEMORY_GB:          '12'
           BOOT_VOLUME_GB:     '150'
-          MAX_ATTEMPTS:       '40'
+          MAX_ATTEMPTS:       '18'
           WAIT_MIN:           '85'
           WAIT_MAX:           '95'
         run: python bot.py
