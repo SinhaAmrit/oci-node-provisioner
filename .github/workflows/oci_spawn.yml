@@ -42,6 +42,7 @@ jobs:
           OCPUS:              '2'
           MEMORY_GB:          '12'
           BOOT_VOLUME_GB:     '150'
-          MAX_ATTEMPTS:       '30'
-          POLL_INTERVAL:      '65'
+          MAX_ATTEMPTS:       '45'
+          WAIT_MIN:           '90'
+          WAIT_MAX:           '150'
         run: python bot.py
