@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-OCI Ampere A1 Provisioner
+OCI Ampere A1 Provisioner — Per-Account Rate Limit Optimized
 Target: Canonical Ubuntu 24.04 aarch64
-Runs via GitHub Actions, uses env vars from repo secrets.
+Strategy: few launch calls, wide spacing, long exponential 429 backoff
 """
 
 import os
@@ -29,15 +29,15 @@ SHAPE         = "VM.Standard.A1.Flex"
 OCPUS         = int(os.environ.get("OCPUS", "2"))
 MEMORY_GB     = int(os.environ.get("MEMORY_GB", "12"))
 BOOT_VOLUME_GB = int(os.environ.get("BOOT_VOLUME_GB", "150"))
-AD_INDEX      = os.environ.get("OCI_AD", "1")  # 1, 2, or 3
 
-# Retry config
-MAX_ATTEMPTS  = int(os.environ.get("MAX_ATTEMPTS", "40"))
-POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "60"))
+# Retry config — wide random spacing for launch calls
+MAX_ATTEMPTS  = int(os.environ.get("MAX_ATTEMPTS", "45"))
+WAIT_MIN      = int(os.environ.get("WAIT_MIN", "90"))
+WAIT_MAX      = int(os.environ.get("WAIT_MAX", "150"))
 
-# 429 adaptive cooldown (150s → 300s → 450s → max 600s)
-COOLDOWN_BASE = int(os.environ.get("COOLDOWN_BASE", "150"))
-COOLDOWN_MAX  = int(os.environ.get("COOLDOWN_MAX", "600"))
+# 429 adaptive cooldown — aggressive backoff (individual limit hai toh backoff kaam karta hai)
+COOLDOWN_BASE = int(os.environ.get("COOLDOWN_BASE", "240"))
+COOLDOWN_MAX  = int(os.environ.get("COOLDOWN_MAX", "1200"))
 
 # ─── OCI CLIENT SETUP ──────────────────────────────────────────────
 config = {
@@ -166,11 +166,11 @@ def main():
     log(f"Shape:         {SHAPE} ({OCPUS} OCPU / {MEMORY_GB} GB)")
     log(f"Boot Volume:   {BOOT_VOLUME_GB} GB")
     log(f"Max Attempts:  {MAX_ATTEMPTS}")
-    log(f"Interval:      {POLL_INTERVAL}s (jitter ±10s)")
+    log(f"Random wait:   {WAIT_MIN}s — {WAIT_MAX}s")
     log(f"429 Cooldown:  {COOLDOWN_BASE}s → {COOLDOWN_MAX}s (adaptive)")
     log("")
 
-    # Duplicate check
+    # Duplicate check — sirf start mein (har attempt pe nahi)
     existing = get_active_instances()
     if existing:
         log(f"⚠️  Instance already exists: {existing[0].id}")
@@ -198,7 +198,7 @@ def main():
         if error is not None:
             if error.status == 500 and "Out of host capacity" in error.message:
                 log("⏳ Out of host capacity.")
-                consecutive_429 = 0  # capacity error ≠ rate limit, reset cooldown
+                consecutive_429 = 0
             elif error.status == 429:
                 consecutive_429 += 1
                 cooldown = min(COOLDOWN_BASE * consecutive_429, COOLDOWN_MAX)
@@ -214,9 +214,9 @@ def main():
                 log(f"⚠️  Error {error.status}: {error.message}")
 
         if attempt < MAX_ATTEMPTS:
-            # Jitter: ±10s random, taaki region ke baaki bots se sync na ho
-            wait = POLL_INTERVAL + random.randint(-10, 10)
-            log(f"😴 Sleeping {wait}s...")
+            # Random wide spacing — launch API ki per-account bucket bharne se bacho
+            wait = random.randint(WAIT_MIN, WAIT_MAX)
+            log(f"😴 Sleeping {wait}s (random)...")
             time.sleep(wait)
 
     log("❌ Max attempts reached. Exiting.")
