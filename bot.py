@@ -286,8 +286,9 @@ def main():
             log(f"😴 Sleeping {wait}s (random)...")
             time.sleep(wait)
 
-    log("❌ Max attempts reached. Exiting.")
-    return 1
+        log("❌ Max attempts reached. Exiting.")
+    tg_send(f"⏳ Run finished — no capacity after {MAX_ATTEMPTS} attempts.")
+    return 0
 
 
 if __name__ == "__main__":
