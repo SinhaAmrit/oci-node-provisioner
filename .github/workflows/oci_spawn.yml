@@ -6,7 +6,7 @@ on:
   workflow_dispatch:          # Manual trigger button
   push:
     branches: [ main ]
-    paths: [ '.github/workflows/provision.yml' ]
+    paths: [ '.github/workflows/oci_spawn.yml' ]
 
 jobs:
   provision:
