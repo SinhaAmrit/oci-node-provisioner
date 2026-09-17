@@ -55,6 +55,6 @@ jobs:
           MEMORY_GB:          '12'
           BOOT_VOLUME_GB:     '150'
           MAX_ATTEMPTS:       '18'
-          WAIT_MIN:           '85'
+          WAIT_MIN:           '90'
           WAIT_MAX:           '95'
         run: python bot.py
