@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-OCI Ampere A1 Provisioner — Final
+OCI Ampere A1 Provisioner — Final with Self-Chain
 Target: Canonical Ubuntu 24.04 aarch64
 - Random 85-95s interval (proven zero-429 sweet spot)
-- Telegram notification on start + success + fatal errors
-- Auto-disables the GitHub workflow after instance creation
+- Telegram notifications (start / success / round-over / fatal)
+- Auto-disables workflow on success
+- Self-chains next run (no dependency on GitHub cron)
 """
 
 import os
@@ -31,9 +32,12 @@ OCI_COMPARTMENT_ID = os.environ.get("OCI_STACK_ID", OCI_TENANCY_ID)
 BOT_TOKEN    = os.environ.get("BOT_TOKEN", "")
 TELEGRAM_UID = os.environ.get("TELEGRAM_UID", "")
 
-# GitHub auto-disable (github.token from workflow)
-GH_REPO       = os.environ.get("GITHUB_REPOSITORY", "")  # Actions auto-set karta hai
+# GitHub tokens
+# GH_TOKEN  = github.token (workflow ke paas built-in) — workflow disable ke liye
+# PAT_TOKEN = personal access token — self-chain dispatch ke liye (github.token recursion rokta hai)
+GH_REPO       = os.environ.get("GITHUB_REPOSITORY", "")
 GH_TOKEN      = os.environ.get("GH_TOKEN", "")
+PAT_TOKEN     = os.environ.get("PAT_TOKEN", "")
 WORKFLOW_PATH = os.environ.get("WORKFLOW_PATH", ".github/workflows/oci_spawn.yml")
 
 # Instance config
@@ -45,7 +49,7 @@ BOOT_VOLUME_GB = int(os.environ.get("BOOT_VOLUME_GB", "150"))
 
 # Retry config — proven sweet spot (zero 429 zone)
 MAX_ATTEMPTS  = int(os.environ.get("MAX_ATTEMPTS", "18"))
-WAIT_MIN      = int(os.environ.get("WAIT_MIN", "90"))
+WAIT_MIN      = int(os.environ.get("WAIT_MIN", "85"))
 WAIT_MAX      = int(os.environ.get("WAIT_MAX", "95"))
 
 # 429 insurance (normally trigger nahi hoga)
@@ -86,7 +90,7 @@ def tg_send(msg):
 
 
 def disable_workflow():
-    """GitHub API se workflow disable (success ke baad cron auto-band)."""
+    """GitHub API se workflow disable (success ke baad cron + chain dono band)."""
     if not GH_REPO or not GH_TOKEN:
         log("⚠️  GH_TOKEN missing — workflow auto-disable skip. Manual disable karo.")
         return
@@ -99,11 +103,32 @@ def disable_workflow():
         resp = urllib.request.urlopen(req, timeout=10)
         if resp.status in (200, 204):
             log("✅ Workflow auto-disabled. Cron ab nahi chalega.")
-            tg_send("🔒 Workflow auto-disabled. No more cron runs.")
+            tg_send("🔒 Workflow auto-disabled. No more runs.")
         else:
             log(f"⚠️  Disable API returned {resp.status} — manual disable karo.")
     except Exception as e:
         log(f"⚠️  Auto-disable failed: {e} — manual disable kar lena.")
+
+
+def chain_next_run():
+    """Self-chain: next run trigger karo PAT se (github.token se dispatch nahi hota)."""
+    if not PAT_TOKEN or not GH_REPO:
+        log("⚠️  PAT_TOKEN missing — self-chain skip. Cron fallback rahega.")
+        return
+    try:
+        url = f"https://api.github.com/repos/{GH_REPO}/actions/workflows/{WORKFLOW_PATH}/dispatches"
+        data = json.dumps({"ref": "main"}).encode()
+        req = urllib.request.Request(url, data=data, method="POST", headers={
+            "Authorization": f"Bearer {PAT_TOKEN}",
+            "Accept": "application/vnd.github+json",
+        })
+        resp = urllib.request.urlopen(req, timeout=10)
+        if resp.status == 204:
+            log("🔗 Next run chained — bot continues without cron.")
+        else:
+            log(f"⚠️  Chain dispatch returned {resp.status}.")
+    except Exception as e:
+        log(f"⚠️  Self-chain failed: {e} — cron fallback rahega.")
 
 
 def get_availability_domain():
@@ -224,12 +249,13 @@ def main():
         f"Attempts: {MAX_ATTEMPTS} ({WAIT_MIN}-{WAIT_MAX}s)"
     )
 
-    # Duplicate check
+    # Duplicate check — instance already ho toh disable + exit
     existing = get_active_instances()
     if existing:
         log(f"⚠️  Instance already exists: {existing[0].id}")
         log("Skipping to avoid duplicates.")
-        tg_send("ℹ️  Instance already exists — no new launch needed.")
+        tg_send("ℹ️  Instance already exists — disabling workflow.")
+        disable_workflow()
         return 0
 
     ad_name = get_availability_domain()
@@ -247,7 +273,7 @@ def main():
             if wait_for_running(instance.id):
                 ip = get_instance_ip(instance.id)
                 log("🚀 Instance is live!")
-                # ─── SUCCESS: Notify + Auto-stop ───
+                # ─── SUCCESS: Notify + Auto-disable (chain nahi hogi) ───
                 tg_send(
                     f"🎉 VPS CREATED!\n\n"
                     f"🖥  Name: {INSTANCE_NAME}\n"
@@ -286,8 +312,9 @@ def main():
             log(f"😴 Sleeping {wait}s (random)...")
             time.sleep(wait)
 
-        log("❌ Max attempts reached. Exiting.")
-    tg_send(f"⏳ Run finished — no capacity after {MAX_ATTEMPTS} attempts.")
+    log("❌ Max attempts reached. Exiting.")
+    tg_send(f"⏳ Round over — no capacity after {MAX_ATTEMPTS} attempts. Next round starting...")
+    chain_next_run()
     return 0
 
 
