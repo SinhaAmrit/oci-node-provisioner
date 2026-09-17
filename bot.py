@@ -200,7 +200,7 @@ def main():
                 log("⏳ Out of host capacity.")
             elif error.status == 429:
                 log("⏳ Rate limited. Extra 150s wait...")
-                time.sleep(150)  # Extra wait on top of normal POLL_INTERVAL
+                time.sleep(90)  # Extra wait on top of normal POLL_INTERVAL
             elif error.status == 401:
                 log("❌ Auth failed. Check credentials.")
                 return 1
