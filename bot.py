@@ -295,6 +295,7 @@ def main():
             time.sleep(wait)
 
     log("❌ Max attempts reached. Exiting.")
+    time.sleep(90)
     chain_next_run()
     return 0
 
