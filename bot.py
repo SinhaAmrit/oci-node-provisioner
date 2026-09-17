@@ -39,6 +39,7 @@ GH_REPO       = os.environ.get("GITHUB_REPOSITORY", "")
 GH_TOKEN      = os.environ.get("GH_TOKEN", "")
 PAT_TOKEN     = os.environ.get("PAT_TOKEN", "")
 WORKFLOW_PATH = os.environ.get("WORKFLOW_PATH", ".github/workflows/oci_spawn.yml")
+WORKFLOW_FILE = os.path.basename(WORKFLOW_PATH)  # API ko sirf file name chahiye (e.g. oci_spawn.yml)
 
 # Instance config
 INSTANCE_NAME = "ampere-ubuntu2404"
@@ -95,7 +96,7 @@ def disable_workflow():
         log("⚠️  GH_TOKEN missing — workflow auto-disable skip. Manual disable karo.")
         return
     try:
-        url = f"https://api.github.com/repos/{GH_REPO}/actions/workflows/{WORKFLOW_PATH}/disable"
+        url = f"https://api.github.com/repos/{GH_REPO}/actions/workflows/{WORKFLOW_FILE}/disable"
         req = urllib.request.Request(url, data=b"", method="PUT", headers={
             "Authorization": f"Bearer {GH_TOKEN}",
             "Accept": "application/vnd.github+json",
@@ -116,7 +117,7 @@ def chain_next_run():
         log("⚠️  PAT_TOKEN missing — self-chain skip. Cron fallback rahega.")
         return
     try:
-        url = f"https://api.github.com/repos/{GH_REPO}/actions/workflows/{WORKFLOW_PATH}/dispatches"
+        url = f"https://api.github.com/repos/{GH_REPO}/actions/workflows/{WORKFLOW_FILE}/dispatches"
         data = json.dumps({"ref": "main"}).encode()
         req = urllib.request.Request(url, data=data, method="POST", headers={
             "Authorization": f"Bearer {PAT_TOKEN}",
