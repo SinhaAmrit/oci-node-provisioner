@@ -1,14 +1,14 @@
-
 #!/usr/bin/env python3
 """
 OCI Ampere A1 Provisioner
-Target: Canonical Ubuntu 22.04 Minimal aarch64
+Target: Canonical Ubuntu 24.04 aarch64
 Runs via GitHub Actions, uses env vars from repo secrets.
 """
 
 import os
 import sys
 import time
+import random
 import oci
 from datetime import datetime, timezone
 
@@ -24,7 +24,7 @@ OCI_PUBLIC_SSH_KEY = os.environ["OCI_PUBLIC_SSH_KEY"]
 OCI_COMPARTMENT_ID = os.environ.get("OCI_STACK_ID", OCI_TENANCY_ID)
 
 # Instance config
-INSTANCE_NAME = "ampere-ubuntu2204"
+INSTANCE_NAME = "ampere-ubuntu2404"
 SHAPE         = "VM.Standard.A1.Flex"
 OCPUS         = int(os.environ.get("OCPUS", "2"))
 MEMORY_GB     = int(os.environ.get("MEMORY_GB", "12"))
@@ -32,8 +32,12 @@ BOOT_VOLUME_GB = int(os.environ.get("BOOT_VOLUME_GB", "150"))
 AD_INDEX      = os.environ.get("OCI_AD", "1")  # 1, 2, or 3
 
 # Retry config
-MAX_ATTEMPTS  = int(os.environ.get("MAX_ATTEMPTS", "30"))
+MAX_ATTEMPTS  = int(os.environ.get("MAX_ATTEMPTS", "40"))
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "60"))
+
+# 429 adaptive cooldown (150s → 300s → 450s → max 600s)
+COOLDOWN_BASE = int(os.environ.get("COOLDOWN_BASE", "150"))
+COOLDOWN_MAX  = int(os.environ.get("COOLDOWN_MAX", "600"))
 
 # ─── OCI CLIENT SETUP ──────────────────────────────────────────────
 config = {
@@ -46,6 +50,7 @@ config = {
 
 compute_client  = oci.core.ComputeClient(config)
 identity_client = oci.identity.IdentityClient(config)
+network_client  = oci.core.VirtualNetworkClient(config)
 
 
 def log(msg):
@@ -54,15 +59,10 @@ def log(msg):
 
 
 def get_availability_domain():
-    """Resolve AD name based on region + index."""
+    """Free tier home regions have a single AD — just use the first one."""
     ads = identity_client.list_availability_domains(
         compartment_id=OCI_COMPARTMENT_ID
     ).data
-    target = f"{OCI_REGION}-AD-{AD_INDEX}"
-    for ad in ads:
-        if ad.name == target:
-            return ad.name
-    log(f"⚠️  {target} not found, using {ads[0].name}")
     return ads[0].name
 
 
@@ -148,9 +148,6 @@ def get_instance_ip(instance_id):
             instance_id=instance_id,
         ).data
         for va in vnic_attachments:
-            # Use network client to get VNIC details
-            from oci.core import VirtualNetworkClient
-            network_client = VirtualNetworkClient(config)
             vnic = network_client.get_vnic(va.vnic_id).data
             if vnic.public_ip:
                 log(f"🌐 Public IP: {vnic.public_ip}")
@@ -163,13 +160,14 @@ def get_instance_ip(instance_id):
 
 def main():
     log("=" * 60)
-    log("OCI Ampere Provisioner — Ubuntu 22.04 Minimal aarch64")
+    log("OCI Ampere Provisioner — Ubuntu 24.04 aarch64")
     log("=" * 60)
     log(f"Region:        {OCI_REGION}")
     log(f"Shape:         {SHAPE} ({OCPUS} OCPU / {MEMORY_GB} GB)")
     log(f"Boot Volume:   {BOOT_VOLUME_GB} GB")
     log(f"Max Attempts:  {MAX_ATTEMPTS}")
-    log(f"Interval:      {POLL_INTERVAL}s")
+    log(f"Interval:      {POLL_INTERVAL}s (jitter ±10s)")
+    log(f"429 Cooldown:  {COOLDOWN_BASE}s → {COOLDOWN_MAX}s (adaptive)")
     log("")
 
     # Duplicate check
@@ -182,6 +180,8 @@ def main():
     ad_name = get_availability_domain()
     log(f"Availability Domain: {ad_name}")
     log("")
+
+    consecutive_429 = 0
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
         log(f"── Attempt {attempt}/{MAX_ATTEMPTS} ──")
@@ -198,9 +198,12 @@ def main():
         if error is not None:
             if error.status == 500 and "Out of host capacity" in error.message:
                 log("⏳ Out of host capacity.")
+                consecutive_429 = 0  # capacity error ≠ rate limit, reset cooldown
             elif error.status == 429:
-                log("⏳ Rate limited. Extra 150s wait...")
-                time.sleep(90)  # Extra wait on top of normal POLL_INTERVAL
+                consecutive_429 += 1
+                cooldown = min(COOLDOWN_BASE * consecutive_429, COOLDOWN_MAX)
+                log(f"⏳ Rate limited (429 x{consecutive_429}). Cooling down {cooldown}s...")
+                time.sleep(cooldown)
             elif error.status == 401:
                 log("❌ Auth failed. Check credentials.")
                 return 1
@@ -211,8 +214,10 @@ def main():
                 log(f"⚠️  Error {error.status}: {error.message}")
 
         if attempt < MAX_ATTEMPTS:
-            log(f"😴 Sleeping {POLL_INTERVAL}s...")
-            time.sleep(POLL_INTERVAL)
+            # Jitter: ±10s random, taaki region ke baaki bots se sync na ho
+            wait = POLL_INTERVAL + random.randint(-10, 10)
+            log(f"😴 Sleeping {wait}s...")
+            time.sleep(wait)
 
     log("❌ Max attempts reached. Exiting.")
     return 1
