@@ -39,6 +39,10 @@ jobs:
           OCI_IMAGE_ID:       ${{ secrets.OCI_IMAGE_ID }}
           OCI_PUBLIC_SSH_KEY: ${{ secrets.OCI_PUBLIC_SSH_KEY }}
           OCI_STACK_ID:       ${{ secrets.OCI_STACK_ID }}
+          BOT_TOKEN:          ${{ secrets.BOT_TOKEN }}
+          TELEGRAM_UID:       ${{ secrets.TELEGRAM_UID }}
+          GH_TOKEN:           ${{ secrets.GH_TOKEN }}
+          WORKFLOW_PATH:      '.github/workflows/oci_spawn.yml'
           OCPUS:              '2'
           MEMORY_GB:          '12'
           BOOT_VOLUME_GB:     '150'
