@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""
-OCI Ampere A1 Provisioner — Final with Self-Chain
-Target: Canonical Ubuntu 24.04 aarch64
-- Random 85-95s interval (proven zero-429 sweet spot)
-- Telegram notifications (start / success / round-over / fatal)
-- Auto-disables workflow on success
-- Self-chains next run (no dependency on GitHub cron)
-"""
 
 import os
 import sys
@@ -33,13 +25,11 @@ BOT_TOKEN    = os.environ.get("BOT_TOKEN", "")
 TELEGRAM_UID = os.environ.get("TELEGRAM_UID", "")
 
 # GitHub tokens
-# GH_TOKEN  = github.token (workflow ke paas built-in) — workflow disable ke liye
-# PAT_TOKEN = personal access token — self-chain dispatch ke liye (github.token recursion rokta hai)
 GH_REPO       = os.environ.get("GITHUB_REPOSITORY", "")
 GH_TOKEN      = os.environ.get("GH_TOKEN", "")
 PAT_TOKEN     = os.environ.get("PAT_TOKEN", "")
 WORKFLOW_PATH = os.environ.get("WORKFLOW_PATH", ".github/workflows/oci_spawn.yml")
-WORKFLOW_FILE = os.path.basename(WORKFLOW_PATH)  # API ko sirf file name chahiye (e.g. oci_spawn.yml)
+WORKFLOW_FILE = os.path.basename(WORKFLOW_PATH)
 
 # Instance config
 INSTANCE_NAME = "ampere-ubuntu2404"
@@ -48,12 +38,12 @@ OCPUS         = int(os.environ.get("OCPUS", "2"))
 MEMORY_GB     = int(os.environ.get("MEMORY_GB", "12"))
 BOOT_VOLUME_GB = int(os.environ.get("BOOT_VOLUME_GB", "150"))
 
-# Retry config — proven sweet spot (zero 429 zone)
+# Retry config
 MAX_ATTEMPTS  = int(os.environ.get("MAX_ATTEMPTS", "18"))
 WAIT_MIN      = int(os.environ.get("WAIT_MIN", "85"))
 WAIT_MAX      = int(os.environ.get("WAIT_MAX", "95"))
 
-# 429 insurance (normally trigger nahi hoga)
+# 429 insurance
 COOLDOWN_BASE = int(os.environ.get("COOLDOWN_BASE", "240"))
 COOLDOWN_MAX  = int(os.environ.get("COOLDOWN_MAX", "1200"))
 
@@ -104,7 +94,6 @@ def disable_workflow():
         resp = urllib.request.urlopen(req, timeout=10)
         if resp.status in (200, 204):
             log("✅ Workflow auto-disabled. Cron ab nahi chalega.")
-            tg_send("🔒 Workflow auto-disabled. No more runs.")
         else:
             log(f"⚠️  Disable API returned {resp.status} — manual disable karo.")
     except Exception as e:
@@ -243,19 +232,11 @@ def main():
     log(f"Random wait:   {WAIT_MIN}s — {WAIT_MAX}s")
     log("")
 
-    tg_send(
-        f"🤖 Provisioner started\n"
-        f"Region: {OCI_REGION}\n"
-        f"Shape: {OCPUS} OCPU / {MEMORY_GB} GB\n"
-        f"Attempts: {MAX_ATTEMPTS} ({WAIT_MIN}-{WAIT_MAX}s)"
-    )
-
-    # Duplicate check — instance already ho toh disable + exit
+    # Duplicate check — instance already ho toh disable + exit (no Telegram spam)
     existing = get_active_instances()
     if existing:
         log(f"⚠️  Instance already exists: {existing[0].id}")
         log("Skipping to avoid duplicates.")
-        tg_send("ℹ️  Instance already exists — disabling workflow.")
         disable_workflow()
         return 0
 
@@ -274,7 +255,7 @@ def main():
             if wait_for_running(instance.id):
                 ip = get_instance_ip(instance.id)
                 log("🚀 Instance is live!")
-                # ─── SUCCESS: Notify + Auto-disable (chain nahi hogi) ───
+                # ─── SUCCESS: Single Telegram message with all info ───
                 tg_send(
                     f"🎉 VPS CREATED!\n\n"
                     f"🖥  Name: {INSTANCE_NAME}\n"
@@ -314,7 +295,6 @@ def main():
             time.sleep(wait)
 
     log("❌ Max attempts reached. Exiting.")
-    tg_send(f"⏳ Round over — no capacity after {MAX_ATTEMPTS} attempts. Next round starting...")
     chain_next_run()
     return 0
 
