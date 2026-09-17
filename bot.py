@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """
-OCI Ampere A1 Provisioner — Per-Account Rate Limit Optimized
+OCI Ampere A1 Provisioner — Telegram Integrated + Auto-Stop
 Target: Canonical Ubuntu 24.04 aarch64
-Strategy: few launch calls, wide spacing, long exponential 429 backoff
+- Random 85-95s interval (proven zero-429 sweet spot)
+- Telegram notification on success
+- Auto-disables the GitHub workflow after instance creation
 """
 
 import os
 import sys
 import time
+import json
 import random
+import urllib.request
 import oci
 from datetime import datetime, timezone
 
@@ -23,6 +27,15 @@ OCI_IMAGE_ID       = os.environ["OCI_IMAGE_ID"]
 OCI_PUBLIC_SSH_KEY = os.environ["OCI_PUBLIC_SSH_KEY"]
 OCI_COMPARTMENT_ID = os.environ.get("OCI_STACK_ID", OCI_TENANCY_ID)
 
+# Telegram (optional — agar secrets na hon toh silently skip)
+BOT_TOKEN     = os.environ.get("BOT_TOKEN", "")
+TELEGRAM_UID  = os.environ.get("TELEGRAM_UID", "")
+
+# GitHub (auto-disable ke liye — GITHUB_TOKEN workflow mein auto-available hai)
+GH_REPO       = os.environ.get("GITHUB_REPOSITORY", "")   # auto-set by Actions
+GH_TOKEN      = os.environ.get("GH_TOKEN", "")             # workflow mein pass karna hoga
+WORKFLOW_PATH = os.environ.get("WORKFLOW_PATH", ".github/workflows/provision.yml")
+
 # Instance config
 INSTANCE_NAME = "ampere-ubuntu2404"
 SHAPE         = "VM.Standard.A1.Flex"
@@ -30,12 +43,12 @@ OCPUS         = int(os.environ.get("OCPUS", "2"))
 MEMORY_GB     = int(os.environ.get("MEMORY_GB", "12"))
 BOOT_VOLUME_GB = int(os.environ.get("BOOT_VOLUME_GB", "150"))
 
-# Retry config — wide random spacing for launch calls
-MAX_ATTEMPTS  = int(os.environ.get("MAX_ATTEMPTS", "45"))
-WAIT_MIN      = int(os.environ.get("WAIT_MIN", "90"))
-WAIT_MAX      = int(os.environ.get("WAIT_MAX", "150"))
+# Retry config — proven sweet spot (zero 429 zone)
+MAX_ATTEMPTS  = int(os.environ.get("MAX_ATTEMPTS", "40"))
+WAIT_MIN      = int(os.environ.get("WAIT_MIN", "85"))
+WAIT_MAX      = int(os.environ.get("WAIT_MAX", "95"))
 
-# 429 adaptive cooldown — aggressive backoff (individual limit hai toh backoff kaam karta hai)
+# 429 insurance (chalega hi nahi agar 429 na aaye)
 COOLDOWN_BASE = int(os.environ.get("COOLDOWN_BASE", "240"))
 COOLDOWN_MAX  = int(os.environ.get("COOLDOWN_MAX", "1200"))
 
@@ -56,6 +69,38 @@ network_client  = oci.core.VirtualNetworkClient(config)
 def log(msg):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{ts}] {msg}", flush=True)
+
+
+def tg_send(msg):
+    """Telegram notification — bhejna fail ho toh bhi script nahi rukegi."""
+    if not BOT_TOKEN or not TELEGRAM_UID:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        data = json.dumps({"chat_id": TELEGRAM_UID, "text": msg}).encode()
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=10)
+        log("📲 Telegram notification sent.")
+    except Exception as e:
+        log(f"⚠️  Telegram send failed: {e}")
+
+
+def disable_workflow():
+    """GitHub API se workflow disable karo (success ke baad auto-stop)."""
+    if not GH_REPO or not GH_TOKEN:
+        log("⚠️  GH_TOKEN missing — workflow auto-disable skip. Manual disable karo.")
+        return
+    try:
+        url = f"https://api.github.com/repos/{GH_REPO}/actions/workflows/{WORKFLOW_PATH}/disable"
+        req = urllib.request.Request(url, data=b"", method="PUT", headers={
+            "Authorization": f"Bearer {GH_TOKEN}",
+            "Accept": "application/vnd.github+json",
+        })
+        urllib.request.urlopen(req, timeout=10)
+        log("✅ Workflow auto-disabled. Cron ab nahi chalega.")
+        tg_send("🔒 Workflow auto-disabled. No more cron runs.")
+    except Exception as e:
+        log(f"⚠️  Auto-disable failed: {e} — manually disable kar lena.")
 
 
 def get_availability_domain():
@@ -167,14 +212,14 @@ def main():
     log(f"Boot Volume:   {BOOT_VOLUME_GB} GB")
     log(f"Max Attempts:  {MAX_ATTEMPTS}")
     log(f"Random wait:   {WAIT_MIN}s — {WAIT_MAX}s")
-    log(f"429 Cooldown:  {COOLDOWN_BASE}s → {COOLDOWN_MAX}s (adaptive)")
     log("")
 
-    # Duplicate check — sirf start mein (har attempt pe nahi)
+    # Duplicate check
     existing = get_active_instances()
     if existing:
         log(f"⚠️  Instance already exists: {existing[0].id}")
         log("Skipping to avoid duplicates.")
+        tg_send("ℹ️  Instance already exists — no new launch needed.")
         return 0
 
     ad_name = get_availability_domain()
@@ -190,8 +235,19 @@ def main():
         if instance is not None:
             log(f"✅ Launched: {instance.id}")
             if wait_for_running(instance.id):
-                get_instance_ip(instance.id)
+                ip = get_instance_ip(instance.id)
                 log("🚀 Instance is live!")
+                # ─── SUCCESS: Notify + Auto-stop ───
+                tg_send(
+                    f"🎉 VPS CREATED!\n\n"
+                    f"🖥  Name: {INSTANCE_NAME}\n"
+                    f"📍 Region: {OCI_REGION}\n"
+                    f"⚙️  Shape: {SHAPE} ({OCPUS} OCPU / {MEMORY_GB} GB)\n"
+                    f"💾 Boot: {BOOT_VOLUME_GB} GB\n"
+                    f"🌐 IP: {ip or 'check console'}\n\n"
+                    f"🔐 SSH: ssh ubuntu@{ip or '<IP>'}"
+                )
+                disable_workflow()
                 return 0
             return 1
 
@@ -206,15 +262,16 @@ def main():
                 time.sleep(cooldown)
             elif error.status == 401:
                 log("❌ Auth failed. Check credentials.")
+                tg_send("❌ Provisioner STOPPED: Auth failed (401). Check secrets!")
                 return 1
             elif error.status == 404:
                 log(f"❌ Not found: {error.message}")
+                tg_send(f"❌ Provisioner STOPPED: Resource not found (404): {error.message}")
                 return 1
             else:
                 log(f"⚠️  Error {error.status}: {error.message}")
 
         if attempt < MAX_ATTEMPTS:
-            # Random wide spacing — launch API ki per-account bucket bharne se bacho
             wait = random.randint(WAIT_MIN, WAIT_MAX)
             log(f"😴 Sleeping {wait}s (random)...")
             time.sleep(wait)
