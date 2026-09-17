@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-OCI Ampere A1 Provisioner — Telegram Integrated + Auto-Stop
+OCI Ampere A1 Provisioner — Final
 Target: Canonical Ubuntu 24.04 aarch64
 - Random 85-95s interval (proven zero-429 sweet spot)
-- Telegram notification on success
+- Telegram notification on start + success + fatal errors
 - Auto-disables the GitHub workflow after instance creation
 """
 
@@ -27,14 +27,14 @@ OCI_IMAGE_ID       = os.environ["OCI_IMAGE_ID"]
 OCI_PUBLIC_SSH_KEY = os.environ["OCI_PUBLIC_SSH_KEY"]
 OCI_COMPARTMENT_ID = os.environ.get("OCI_STACK_ID", OCI_TENANCY_ID)
 
-# Telegram (optional — agar secrets na hon toh silently skip)
-BOT_TOKEN     = os.environ.get("BOT_TOKEN", "")
-TELEGRAM_UID  = os.environ.get("TELEGRAM_UID", "")
+# Telegram (optional — secrets missing ho toh silently skip)
+BOT_TOKEN    = os.environ.get("BOT_TOKEN", "")
+TELEGRAM_UID = os.environ.get("TELEGRAM_UID", "")
 
-# GitHub (auto-disable ke liye — GITHUB_TOKEN workflow mein auto-available hai)
-GH_REPO       = os.environ.get("GITHUB_REPOSITORY", "")   # auto-set by Actions
-GH_TOKEN      = os.environ.get("GH_TOKEN", "")             # workflow mein pass karna hoga
-WORKFLOW_PATH = os.environ.get("WORKFLOW_PATH", ".github/workflows/provision.yml")
+# GitHub auto-disable (github.token from workflow)
+GH_REPO       = os.environ.get("GITHUB_REPOSITORY", "")  # Actions auto-set karta hai
+GH_TOKEN      = os.environ.get("GH_TOKEN", "")
+WORKFLOW_PATH = os.environ.get("WORKFLOW_PATH", ".github/workflows/oci_spawn.yml")
 
 # Instance config
 INSTANCE_NAME = "ampere-ubuntu2404"
@@ -44,11 +44,11 @@ MEMORY_GB     = int(os.environ.get("MEMORY_GB", "12"))
 BOOT_VOLUME_GB = int(os.environ.get("BOOT_VOLUME_GB", "150"))
 
 # Retry config — proven sweet spot (zero 429 zone)
-MAX_ATTEMPTS  = int(os.environ.get("MAX_ATTEMPTS", "40"))
+MAX_ATTEMPTS  = int(os.environ.get("MAX_ATTEMPTS", "18"))
 WAIT_MIN      = int(os.environ.get("WAIT_MIN", "85"))
 WAIT_MAX      = int(os.environ.get("WAIT_MAX", "95"))
 
-# 429 insurance (chalega hi nahi agar 429 na aaye)
+# 429 insurance (normally trigger nahi hoga)
 COOLDOWN_BASE = int(os.environ.get("COOLDOWN_BASE", "240"))
 COOLDOWN_MAX  = int(os.environ.get("COOLDOWN_MAX", "1200"))
 
@@ -72,7 +72,7 @@ def log(msg):
 
 
 def tg_send(msg):
-    """Telegram notification — bhejna fail ho toh bhi script nahi rukegi."""
+    """Telegram notification — fail hone par bhi main script nahi rukegi."""
     if not BOT_TOKEN or not TELEGRAM_UID:
         return
     try:
@@ -86,7 +86,7 @@ def tg_send(msg):
 
 
 def disable_workflow():
-    """GitHub API se workflow disable karo (success ke baad auto-stop)."""
+    """GitHub API se workflow disable (success ke baad cron auto-band)."""
     if not GH_REPO or not GH_TOKEN:
         log("⚠️  GH_TOKEN missing — workflow auto-disable skip. Manual disable karo.")
         return
@@ -96,15 +96,18 @@ def disable_workflow():
             "Authorization": f"Bearer {GH_TOKEN}",
             "Accept": "application/vnd.github+json",
         })
-        urllib.request.urlopen(req, timeout=10)
-        log("✅ Workflow auto-disabled. Cron ab nahi chalega.")
-        tg_send("🔒 Workflow auto-disabled. No more cron runs.")
+        resp = urllib.request.urlopen(req, timeout=10)
+        if resp.status in (200, 204):
+            log("✅ Workflow auto-disabled. Cron ab nahi chalega.")
+            tg_send("🔒 Workflow auto-disabled. No more cron runs.")
+        else:
+            log(f"⚠️  Disable API returned {resp.status} — manual disable karo.")
     except Exception as e:
-        log(f"⚠️  Auto-disable failed: {e} — manually disable kar lena.")
+        log(f"⚠️  Auto-disable failed: {e} — manual disable kar lena.")
 
 
 def get_availability_domain():
-    """Free tier home regions have a single AD — just use the first one."""
+    """Free tier home regions have a single AD — use the first one."""
     ads = identity_client.list_availability_domains(
         compartment_id=OCI_COMPARTMENT_ID
     ).data
@@ -214,6 +217,13 @@ def main():
     log(f"Random wait:   {WAIT_MIN}s — {WAIT_MAX}s")
     log("")
 
+    tg_send(
+        f"🤖 Provisioner started\n"
+        f"Region: {OCI_REGION}\n"
+        f"Shape: {OCPUS} OCPU / {MEMORY_GB} GB\n"
+        f"Attempts: {MAX_ATTEMPTS} ({WAIT_MIN}-{WAIT_MAX}s)"
+    )
+
     # Duplicate check
     existing = get_active_instances()
     if existing:
@@ -266,7 +276,7 @@ def main():
                 return 1
             elif error.status == 404:
                 log(f"❌ Not found: {error.message}")
-                tg_send(f"❌ Provisioner STOPPED: Resource not found (404): {error.message}")
+                tg_send(f"❌ Provisioner STOPPED: Not found (404): {error.message}")
                 return 1
             else:
                 log(f"⚠️  Error {error.status}: {error.message}")
