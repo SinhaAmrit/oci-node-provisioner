@@ -2,19 +2,19 @@ name: OCI Provisioner
 
 on:
   schedule:
-    - cron: '*/20 * * * *'
-  workflow_dispatch:
+    - cron: '*/20 * * * *'   # Backup trigger (self-chain primary hai ab)
+  workflow_dispatch:          # Manual trigger button
   push:
     branches: [ main ]
     paths: [ '.github/workflows/oci_spawn.yml' ]
 
-# Safety net: agar kabhi run overlap ho, nayi run purani ko cancel kar de
+# Agar kabhi overlap ho toh nayi run purani cancel kare
 concurrency:
   group: oci-provision
   cancel-in-progress: true
 
 permissions:
-  actions: write          # github.token se workflow disable karne ke liye
+  actions: write              # github.token ko workflow disable karne ka power
 
 jobs:
   provision:
@@ -50,11 +50,12 @@ jobs:
           BOT_TOKEN:          ${{ secrets.BOT_TOKEN }}
           TELEGRAM_UID:       ${{ secrets.TELEGRAM_UID }}
           GH_TOKEN:           ${{ github.token }}
+          PAT_TOKEN:          ${{ secrets.PAT_TOKEN }}
           WORKFLOW_PATH:      '.github/workflows/oci_spawn.yml'
           OCPUS:              '2'
           MEMORY_GB:          '12'
           BOOT_VOLUME_GB:     '150'
           MAX_ATTEMPTS:       '18'
-          WAIT_MIN:           '90'
+          WAIT_MIN:           '85'
           WAIT_MAX:           '95'
         run: python bot.py
